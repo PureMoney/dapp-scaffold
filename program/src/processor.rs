@@ -1,5 +1,7 @@
 use crate::error::TroveError;
 use crate::instruction::TroveInstruction;
+use crate::math::Decimal;
+use crate::state::{InitTroveParams, Trove};
 
 use solana_program::{
     account_info::{next_account_info, AccountInfo},
@@ -35,13 +37,18 @@ impl Processor {
         sol_log_compute_units();
 
         match instruction {
-            TroveInstruction::InitTrove {
+            TroveInstruction::ForgetInitTrove {
                 amountSol,
                 amountUsd,
             } => {
                 sol_log_compute_units();
+                msg!("Instruction: ForgetInitTrove");
+                Self::process_init_trove_forget(accounts, amountSol, amountUsd, program_id)
+            }
+            TroveInstruction::InitTrove => {
+                sol_log_compute_units();
                 msg!("Instruction: InitTrove");
-                Self::process_init_trove(accounts, amountSol, amountUsd, program_id)
+                Self::process_init_trove(program_id, accounts)
             }
         }
 
@@ -66,7 +73,7 @@ impl Processor {
         // Ok(())
     }
 
-    fn process_init_trove(
+    fn process_init_trove_forget(
         accounts: &[AccountInfo],
         amountSol: u64,
         amountUsd: u64,
@@ -108,9 +115,39 @@ impl Processor {
 
         Ok(())
     }
+
+    fn process_init_trove(program_id: &Pubkey, accounts: &[AccountInfo]) -> ProgramResult {
+        let account_info_iter = &mut accounts.iter();
+
+        let trove_info = next_account_info(account_info_iter)?;
+        let trove_owner_info = next_account_info(account_info_iter)?;
+        let rent = &Rent::from_account_info(next_account_info(account_info_iter)?)?;
+
+        utils::assert_rent_exempt(rent, trove_info)?;
+        let mut trove = utils::assert_uninitialized::<Trove>(trove_info)?;
+        if trove_info.owner != program_id {
+            msg!("Trove provided is not owned by the lending program");
+            return Err(TroveError::InvalidAccountOwner.into());
+        }
+
+        if !trove_owner_info.is_signer {
+            msg!("Obligation owner provided must be a signer");
+            return Err(TroveError::InvalidSigner.into());
+        }
+
+        trove.init(InitTroveParams {
+            owner: *trove_owner_info.key,
+            deposited_sol: (0 as u64).into(),
+            borrowed_usd: (0 as u64).into(),
+        });
+
+        Trove::pack(trove, &mut trove_info.data.borrow_mut())?;
+
+        Ok(())
+    }
 }
 
-mod util {
+mod utils {
     use super::*;
     pub fn accounts<'a, 'b>(
         accounts: &'b [AccountInfo<'a>],
@@ -118,5 +155,25 @@ mod util {
         let account_info_iter = &mut accounts.iter();
         let borrower_account = next_account_info(account_info_iter)?;
         Ok(borrower_account)
+    }
+
+    pub fn assert_rent_exempt(rent: &Rent, account_info: &AccountInfo) -> ProgramResult {
+        if !rent.is_exempt(account_info.lamports(), account_info.data_len()) {
+            msg!(&rent.minimum_balance(account_info.data_len()).to_string());
+            Err(TroveError::NotRentExempt.into())
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn assert_uninitialized<T: Pack + IsInitialized>(
+        account_info: &AccountInfo,
+    ) -> Result<T, ProgramError> {
+        let account: T = T::unpack_unchecked(&account_info.data.borrow())?;
+        if account.is_initialized() {
+            Err(TroveError::AlreadyInitialized.into())
+        } else {
+            Ok(account)
+        }
     }
 }

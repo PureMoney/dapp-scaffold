@@ -4,6 +4,7 @@ use std::convert::TryInto;
 use crate::error::TroveError::InvalidInstruction;
 
 pub enum TroveInstruction {
+    /// 0
     /// Starts the trade by creating and populating a trove account and transferring ownership of the
     /// given SOL token account to the PDA
     ///
@@ -17,12 +18,22 @@ pub enum TroveInstruction {
     /// 4. `[writable]` (Temp Data Account) The associated trove account, it will hold all necessary info about the trade.
     /// 5. `[]`         The rent sysvar
     /// 6. `[]`         The token program
-    InitTrove {
+    ForgetInitTrove {
         /// The amount of SOL deposited
         amountSol: u64,
         /// The amount of USD borrowed
         amountUsd: u64,
     },
+
+    /// 1
+    /// Initializes a new trove (lending market obligation).
+    ///
+    /// Accounts expected by this instruction:
+    ///
+    ///   0. `[writable]` Trove account - uninitialized.
+    ///   1. `[signer]` Trove owner.
+    ///   2. `[]` Rent sysvar.
+    InitTrove,
 }
 
 impl TroveInstruction {
@@ -31,10 +42,11 @@ impl TroveInstruction {
         let (tag, rest) = input.split_first().ok_or(InvalidInstruction)?;
 
         Ok(match tag {
-            0 => Self::InitTrove {
+            0 => Self::ForgetInitTrove {
                 amountSol: Self::unpack_amount_sol(rest)?,
                 amountUsd: Self::unpack_amount_usd(rest)?,
             },
+            1 => Self::InitTrove,
             _ => return Err(InvalidInstruction.into()),
         })
     }
